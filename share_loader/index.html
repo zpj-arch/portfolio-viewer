@@ -39,18 +39,9 @@ html,body{margin:0;padding:0;height:100%;font-family:"Microsoft YaHei",Arial,san
 <script>
 (function(){
   var COS_BASE='https://my-portfolio-1467782956.cos-website.ap-guangzhou.myqcloud.com';
-  var OWNER_UID='';
+  var OWNER_UID='o_7f3a9c2e1b8d4a6f5c0e2b9d1a3f7c4e';
   var q=new URLSearchParams(location.search);
-  var u=(q.get('u')||q.get('ws')||'').trim();
-  if(!u){
-    if(loading){
-      var p=loading.querySelector('p');
-      if(p)p.innerHTML='未指定作品集<br><span style="font-size:12px;color:#666">在网址后加上 ?u=你的ID 即可查看对应作品集</span>';
-      var ring=loading.querySelector('.ring');
-      if(ring)ring.style.display='none';
-    }
-    return;
-  }
+  var u=q.get('u')||q.get('ws')||OWNER_UID;
   // 加时间戳穿透浏览器与 CDN 缓存
   var COS_URL=COS_BASE+'/users/'+encodeURIComponent(u)+'/index.html?__t='+Date.now();
   var loading=document.getElementById('loading');
