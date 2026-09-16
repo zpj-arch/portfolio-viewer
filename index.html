@@ -464,6 +464,62 @@ ${content}
 </body>
 </html>`;return standalone})()}function exportSite(){saveAll();renderPublish();buildStandaloneHTML().then(standalone=>{if(!standalone){alert('暂无作品，请先上传作品再打包');return}const blob=new Blob([standalone],{type:'text/html;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='作品集.html';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),3000)})}
 // 分享查看模式已移除：现在 ?u= 表示「编辑身份」，打开即进入自己的工作区；对外分享统一走门面页链接 ?u=ID
+// ===== 分享链接英文名：作品 ID 含中文时，用它生成简洁的英文链接后缀 =====
+const SHARE_KEY_RE=/^[a-z0-9][a-z0-9-]{1,31}$/;
+function asciiSafeKey(s){return /^[A-Za-z0-9_-]+$/.test(''+(s||''))}
+function shareKeyStore(uid){return 'void-sharekey::'+uid}
+function getShareKey(uid){try{const v=localStorage.getItem(shareKeyStore(uid));return v&&SHARE_KEY_RE.test(v)?v:''}catch(e){return ''}}
+function setShareKey(uid,k){try{localStorage.setItem(shareKeyStore(uid),k)}catch(e){}}
+// 换设备/清缓存后：从云端草稿里读回该 ID 对应的英文链接名（避免重复询问）
+async function discoverShareKey(uid){try{const r=await apiGet('/draft?uid='+encodeURIComponent(uid));const d=r&&r.ok?r.data:null;if(d&&typeof d==='object'&&d.shareId&&SHARE_KEY_RE.test(d.shareId))return d.shareId}catch(e){}return ''}
+function effectiveShareKey(){const u=getUid()||'';if(!u)return '';return asciiSafeKey(u)?u:(getShareKey(u)||u)}
+// 英文名是否已被他人占用（探测 COS 目录是否已有同名展示页）
+async function shareKeyTaken(k){
+  try{
+    const url=COS_WEBSITE.replace(/\/$/,'')+'/users/'+encodeURIComponent(k)+'/index.html?probe='+Date.now();
+    const r=await fetch(url,{method:'GET',headers:{Range:'bytes=0-0'},cache:'no-store'});
+    return !!r.ok;
+  }catch(e){return false}
+}
+// 首次发布中文 ID 时询问一次英文链接名
+function promptShareKey(uid){
+  return new Promise(resolve=>{
+    const ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(5,6,9,.95);display:flex;align-items:center;justify-content:center;z-index:10000';
+    const box=document.createElement('div');
+    box.style.cssText='background:#0c0e16;color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:28px;width:560px;max-width:92vw;box-shadow:0 10px 40px rgba(0,0,0,.5);font-family:inherit';
+    box.innerHTML='<div style="font-size:18px;font-weight:600;margin-bottom:8px">给你的作品集起一个英文链接名</div>'
+      +'<div style="font-size:14px;color:var(--muted);margin-bottom:16px;line-height:1.7">你的作品 ID 是「'+escapeHtml(uid)+'」，里面有中文。中文放进链接会变成一长串 %E9%83%91 这样的字符，又长又难认。指定一个英文名后，发布出来的分享链接就是简短干净的英文形式（只需设置这一次，以后发布一直沿用）。</div>'
+      +'<input id="shareKeyInput" placeholder="例如 zhengjiejun2026" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box;padding:13px 14px;border:1px solid var(--line);border-radius:10px;font-size:16px;margin-bottom:8px;background:#07070a;color:var(--ink)">'
+      +'<div style="font-size:13px;color:var(--muted);margin-bottom:6px">只能用小写英文字母、数字、短横线，2-32 位（建议用你名字的拼音）</div>'
+      +'<div id="shareKeyPrev" style="font-size:13px;color:var(--cyan);word-break:break-all;min-height:20px;margin-bottom:10px"></div>'
+      +'<div id="shareKeyErr" style="font-size:13px;color:var(--pink);min-height:18px;margin-bottom:14px"></div>'
+      +'<div style="display:flex;gap:12px;justify-content:flex-end">'
+      +'<button id="shareKeyCancel" class="btn" style="background:#151823;color:var(--muted);padding:11px 22px;font-size:15px">取消</button>'
+      +'<button id="shareKeyOk" class="btn primary" style="padding:11px 24px;font-size:15px">确定并发布</button>'
+      +'</div>';
+    ov.appendChild(box);document.body.appendChild(ov);
+    const inp=document.getElementById('shareKeyInput'),err=document.getElementById('shareKeyErr'),prev=document.getElementById('shareKeyPrev'),okBtn=document.getElementById('shareKeyOk');
+    const done=v=>{try{ov.remove()}catch(e){}resolve(v)};
+    setTimeout(()=>{try{inp.focus()}catch(e){}},50);
+    const upd=()=>{const v=(''+inp.value).trim().toLowerCase();prev.textContent=v?('分享链接后缀：?v=2&u='+v):'';return v};
+    inp.addEventListener('input',()=>{upd();err.textContent=''});
+    document.getElementById('shareKeyCancel').onclick=()=>done('');
+    ov.onclick=e=>{if(e.target===ov)done('')};
+    const go=async()=>{
+      const v=upd();
+      if(!v){err.textContent='请输入一个英文名';return;}
+      if(!SHARE_KEY_RE.test(v)){err.textContent='只能用小写字母、数字、短横线，2-32 位，且不能以短横线开头';return;}
+      if(SYS_ID_RE.test(v)){err.textContent='这个名称是系统保留格式，换一个';return;}
+      okBtn.disabled=true;okBtn.textContent='检查中…';
+      const taken=await shareKeyTaken(v);
+      if(taken){err.textContent='「'+v+'」已经被别人用了，换一个吧';okBtn.disabled=false;okBtn.textContent='确定并发布';return;}
+      done(v);
+    };
+    okBtn.onclick=go;
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();go()}});
+  });
+}
 async function publishToCloud(){
   const allBtns=document.querySelectorAll("#publishBtn,#publishTopHtml");
   allBtns.forEach(b=>{b.disabled=true;b.innerHTML="发布中…"});
@@ -474,12 +530,20 @@ async function publishToCloud(){
     saveAll();renderPublish();
     let uid=getUid();
     if(!uid){alert("请先设置你的作品 ID（点顶栏「设置作品 ID」），设置后才能发布。");showUidModal();return;}
+    // 英文链接名：作品 ID 含中文时，用英文目录名发布，分享链接后缀才是干净的英文
+    let pubUid=uid;
+    if(!asciiSafeKey(uid)){
+      let _k=getShareKey(uid)||await discoverShareKey(uid);
+      if(!_k){ _k=await promptShareKey(uid); }
+      if(!_k){ alert("已取消发布。\n\n发布需要一个英文链接名来生成分享链接，下次发布时再起也可以。"); return; }
+      setShareKey(uid,_k); pubUid=_k;
+    }
     // 逐张处理：优先浏览器直传 COS（绕开 API 网关 6MB 限制），失败自动回退 base64
     const uploadedSrc=await Promise.all(list.map(async x=>{
       const dataUrl=await compressDataUrl(x.src,1600,0.82,true);
       try{
         const ext=((dataUrl.split(';')[0].split('/')[1])||'jpeg').replace('jpeg','jpg');
-        const u=await getUploadUrl(uid,ext);
+        const u=await getUploadUrl(pubUid,ext);
         if(u&&u.url&&u.key){
           const blob=dataUrlToBlob(dataUrl);
           await putToCos(u.url,blob);
@@ -492,11 +556,21 @@ async function publishToCloud(){
     if(!html){alert("请先上传作品");return}
     const draftItems=await Promise.all(list.map((x,i)=>compressDataUrl(uploadedSrc[i],1600,0.8,true).then(src=>({...x,src}))));
     const draft={items:draftItems,profile:JSON.parse(localStorage.getItem(profileKeyFor())||'{}'),home:JSON.parse(localStorage.getItem(homeKeyFor())||'{}'),updated_at:new Date().toISOString()};
-    const body={uid,html,draft};
-    const r=await apiPost('/publish',body);
+    draft.shareId=pubUid;
+    let r;
+    if(pubUid===uid){
+      r=await apiPost('/publish',{uid,html,draft});
+    }else{
+      // 展示页写进英文目录（链接干净），草稿仍写回原 ID 目录（换电脑用同一 ID 还能恢复草稿）
+      r=await apiPost('/publish',{uid:pubUid,html});
+      if(r&&r.ok){
+        const r2=await apiPost('/publish',{uid,draft});
+        if(!r2||!r2.ok) console.warn('草稿保存失败（展示页已发布）',r2);
+      }
+    }
     if(!r.ok) throw new Error(r.error||'发布失败');
     // 把相对 SHARE_URL 解析成绝对链接，方便用户直接复制发送给他人
-    const shareRel=SHARE_URL+(SHARE_URL.includes('?')?'&':'?')+'u='+encodeURIComponent(uid);
+    const shareRel=SHARE_URL+(SHARE_URL.includes('?')?'&':'?')+'u='+encodeURIComponent(pubUid);
     let shareAbs;
     try{ shareAbs=new URL(shareRel, location.href).href; }catch(e){ shareAbs=shareRel; }
     showLink(shareAbs);
@@ -644,7 +718,7 @@ function drawRichText(ctx,runs,x0,x1,y,lh,align,baseColor){
   }
   return yy;
 }const AV=320,nameLH=Math.round(NAME_SIZE*1.25),HEAD_TOP=10,KICKER_ADV=80;ctx.font='bold '+NAME_SIZE+'px '+FONT;const nH=wrap(ctx,name,W2).length*nameLH;const TPL_W=W2-145-16,colW=(TPL_W-160)/3;const rowMeta=rows.map(r=>{if(r.tpl){let maxL=1;r.tpl.forEach(c=>{ctx.font='22px '+MONO;const lbw=ctx.measureText(c.lb).width;ctx.font=(ROW_WEIGHT?'bold ':'')+'26px '+FONT;maxL=Math.max(maxL,wrap(ctx,c.v,colW-lbw-6).length)});const lh=Math.round(26*(r.style.lh||1.6));return{...r,lines:maxL,h:maxL*lh+58,lh}}ctx.font=(ROW_WEIGHT?'bold ':'')+'30px '+FONT;const vw=W2-145-16;const lines=Math.max(1,wrap(ctx,r.value,vw).length);const lh=Math.round(30*(r.style.lh||1.6));return{...r,lines,h:lines*lh+58,lh}});const rowsH=rowMeta.reduce((a,r)=>a+r.h+(r.style.pb||0),0);const totalH=AV+HEAD_TOP+KICKER_ADV+nH+rowsH+34;if(!draw)return totalH;ctx.fillStyle=BG;ctx.fillRect(0,y0,W,totalH);let y=y0;const avR=130;if(av){ctx.save();ctx.beginPath();ctx.arc(W/2,y+160,avR,0,Math.PI*2);ctx.clip();const nw=av.naturalWidth||avR*2,nh=av.naturalHeight||avR*2;const s=Math.max(avR*2/nw,avR*2/nh),sw=avR*2/s,sh=avR*2/s;ctx.drawImage(av,(nw-sw)/2,(nh-sh)/2,sw,sh,W/2-avR,y+30,avR*2,avR*2);ctx.restore();ctx.beginPath();ctx.arc(W/2,y+160,avR,0,Math.PI*2);ctx.strokeStyle=CYAN;ctx.lineWidth=1;ctx.stroke()}else{ctx.beginPath();ctx.arc(W/2,y+160,avR,0,Math.PI*2);ctx.strokeStyle=CYAN;ctx.lineWidth=1;ctx.stroke();ctx.font='34px '+FONT;ctx.fillStyle=CYAN;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('头像',W/2,y+160);ctx.textAlign='left';ctx.textBaseline='alphabetic'}y+=AV+HEAD_TOP;ctx.font='22px '+MONO;ctx.fillStyle=MUTED;ctx.textAlign='center';const _kY=y;ctx.fillText('PERSONAL PROFILE / 个人档案',W/2,y);ctx.textAlign='left';y+=KICKER_ADV;ctx.font='bold '+NAME_SIZE+'px '+FONT;ctx.fillStyle=INK;const _nY=y;y=jtxtC(ctx,name,P,W-P,y,W2,nameLH);window.__dbg={kickerY:_kY,nameY:_nY,kickerTop:_kY-15,kickerBottom:_kY+5,nameTop:_nY-50,nameBottom:_nY+5};y+=24;const border=()=>{ctx.strokeStyle=LINE;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(P,y);ctx.lineTo(W-P,y);ctx.stroke()};for(const r of rowMeta){border();const by=y+16+34;ctx.font='26px '+MONO;ctx.fillStyle=CYAN;ctx.fillText(r.label,P,by);if(r.tpl){const txs=P+145+16;r.tpl.forEach((c,i)=>{const x=txs+i*(colW+80);ctx.font='22px '+MONO;ctx.fillStyle=CYAN;const lbw=ctx.measureText(c.lb).width;ctx.fillText(c.lb,x,by);ctx.font=(ROW_WEIGHT?'bold ':'')+'26px '+FONT;ctx.fillStyle=rgbToHex(getComputedStyle(r.el).color);drawBlock(ctx,c.v,x+lbw+6,x+lbw+6+colW-lbw-6,by,colW-lbw-6,r.lh,r.style.align||'left')})}else{const _base=rgbToHex(getComputedStyle(r.el).color);const _runs=getRuns(r.el,_base);drawRichText(ctx,_runs,P+145+16,W-P,by,r.lh,r.style.align||'left',_base)}y+=r.h+(r.style.pb||0)}border();return totalH}
-function showLink(link){let box=document.querySelector("#linkBox");if(!box){box=document.createElement("div");box.id="linkBox";box.className="link-box";document.body.appendChild(box)}const _uid=esc(getUid()||'');box.innerHTML='<div class="link-card"><h3>✅ 发布成功</h3><p>作品集已发布到云端。复制下面的链接发给别人，打开即看到你的作品集（纯展示）：</p><input id="linkInput" readonly value="'+link+'"><div class="link-actions"><button class="btn primary" id="copyLink">复制链接</button><button class="btn" id="openLink">浏览作品</button><button class="btn" id="closeLink">关闭</button></div><p class="link-tip">你的作品 ID：<b>'+_uid+'</b>。在任何电脑上打开本编辑页并输入同一个 ID，都能继续编辑、重新发布（链接不变）。ID 就是钥匙，请勿外发。</p></div>';box.classList.add("open");const ci=document.querySelector("#linkInput");const cp=document.querySelector("#copyLink");if(ci&&cp){cp.onclick=()=>{ci.select();try{document.execCommand("copy")}catch(e){}cp.textContent="已复制 ✓"}}const ob=document.querySelector("#openLink");if(ob)ob.onclick=()=>{let u=link;try{const _cu=getUid();if(_cu){const _r=SHARE_URL+(SHARE_URL.includes('?')?'&':'?')+'u='+encodeURIComponent(_cu);u=new URL(_r,location.href).href}}catch(e){}try{const _w=window.open(u,"_blank");if(!_w)location.href=u}catch(e){location.href=u}};const cl=document.querySelector("#closeLink");if(cl)cl.onclick=()=>box.classList.remove("open")}saveButton.onclick=saveAll;window.addEventListener('beforeunload',()=>{if(window.__switchingUid)return;try{save();saveProfile();saveHome()}catch(e){}});
+function showLink(link){let box=document.querySelector("#linkBox");if(!box){box=document.createElement("div");box.id="linkBox";box.className="link-box";document.body.appendChild(box)}const _uid=esc(getUid()||'');const _sk=esc(effectiveShareKey());box.innerHTML='<div class="link-card"><h3>✅ 发布成功</h3><p>作品集已发布到云端。复制下面的链接发给别人，打开即看到你的作品集（纯展示）：</p><input id="linkInput" readonly value="'+link+'"><div class="link-actions"><button class="btn primary" id="copyLink">复制链接</button><button class="btn" id="openLink">浏览作品</button><button class="btn" id="closeLink">关闭</button></div><p class="link-tip">你的作品 ID：<b>'+_uid+'</b>'+(_sk&&_sk!==_uid?'（分享链接名：'+_sk+'）':'')+'。在任何电脑上打开本编辑页并输入同一个 ID，都能继续编辑、重新发布（链接不变）。ID 就是钥匙，请勿外发。</p></div>';box.classList.add("open");const ci=document.querySelector("#linkInput");const cp=document.querySelector("#copyLink");if(ci&&cp){cp.onclick=()=>{ci.select();try{document.execCommand("copy")}catch(e){}cp.textContent="已复制 ✓"}}const ob=document.querySelector("#openLink");if(ob)ob.onclick=()=>{let u=link;try{const _cu=effectiveShareKey();if(_cu){const _r=SHARE_URL+(SHARE_URL.includes('?')?'&':'?')+'u='+encodeURIComponent(_cu);u=new URL(_r,location.href).href}}catch(e){}try{const _w=window.open(u,"_blank");if(!_w)location.href=u}catch(e){location.href=u}};const cl=document.querySelector("#closeLink");if(cl)cl.onclick=()=>box.classList.remove("open")}saveButton.onclick=saveAll;window.addEventListener('beforeunload',()=>{if(window.__switchingUid)return;try{save();saveProfile();saveHome()}catch(e){}});
 function ensureH1Span(){const h1=document.querySelector('.hero h1');if(!h1)return;const sel=window.getSelection();let offset=-1;if(sel.rangeCount){const r=sel.getRangeAt(0);if(h1.contains(r.startContainer)){const pre=document.createRange();pre.selectNodeContents(h1);pre.setEnd(r.startContainer,r.startOffset);offset=pre.toString().length}}let html=h1.innerHTML;const br=html.lastIndexOf('<br>');if(br<0)return;const before=html.slice(0,br+4);let after=html.slice(br+4).replace(/^<span[^>]*>/,'').replace(/<\/span>$/,'');const fixed=before+'<span>'+after+'</span>';if(fixed===html)return;h1.innerHTML=fixed;if(offset>=0){const walker=document.createTreeWalker(h1,NodeFilter.SHOW_TEXT);let pos=0,node,tn=null,to=0;while((node=walker.nextNode())){const len=node.nodeValue.length;if(pos+len>=offset){tn=node;to=offset-pos;break}pos+=len}if(tn){const r2=document.createRange();r2.setStart(tn,to);r2.collapse(true);sel.removeAllRanges();sel.addRange(r2)}}}
 function loadHome(){try{const d=JSON.parse(localStorage.getItem(homeKeyFor()))||{};const L=document.querySelector('.hero-label'),B=document.querySelector('.brand'),H=document.querySelector('.hero h1'),C=document.querySelector('.hero-copy');if(d.label){L.innerHTML=d.label;stripBg(L)}if(d.brand){let b=d.brand;if(b.indexOf('你的名字')>=0)b=B.innerHTML;B.innerHTML=b;stripBg(B)}if(d.h1){H.innerHTML=d.h1;stripBg(H)}if(d.copy){C.innerHTML=d.copy;stripBg(C)}}catch(e){}}
 
